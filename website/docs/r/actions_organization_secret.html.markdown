@@ -48,7 +48,7 @@ The following arguments are supported:
 
 * `secret_name`             - (Required) Name of the secret
 * `plaintext_value`         - (Required) Plaintext value of the secret to be encrypted
-* `visiblity`               - (Required) Configures the access that repositories have to the organization secret.
+* `visibility`               - (Required) Configures the access that repositories have to the organization secret.
                               Must be one of `all`, `private`, `selected`. `selected_repository_ids` is required if set to `selected`.
 * `selected_repository_ids` - (Optional) An array of repository ids that can access the organization secret.
 
