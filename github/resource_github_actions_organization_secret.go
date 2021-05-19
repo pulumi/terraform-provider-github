@@ -48,7 +48,6 @@ func resourceGithubActionsOrganizationSecret() *schema.Resource {
 				Elem: &schema.Schema{
 					Type: schema.TypeInt,
 				},
-				Set:      schema.HashInt,
 				Optional: true,
 			},
 			"created_at": {
