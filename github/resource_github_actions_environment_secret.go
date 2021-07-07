@@ -3,7 +3,6 @@ package github
 import (
 	"context"
 	"encoding/base64"
-	"fmt"
 	"log"
 	"net/http"
 
@@ -12,20 +11,23 @@ import (
 	"github.com/hashicorp/terraform-plugin-sdk/helper/validation"
 )
 
-func resourceGithubActionsOrganizationSecret() *schema.Resource {
+func resourceGithubActionsEnvironmentSecret() *schema.Resource {
 	return &schema.Resource{
-		Create: resourceGithubActionsOrganizationSecretCreateOrUpdate,
-		Read:   resourceGithubActionsOrganizationSecretRead,
-		Update: resourceGithubActionsOrganizationSecretCreateOrUpdate,
-		Delete: resourceGithubActionsOrganizationSecretDelete,
-		Importer: &schema.ResourceImporter{
-			State: func(d *schema.ResourceData, meta interface{}) ([]*schema.ResourceData, error) {
-				d.Set("secret_name", d.Id())
-				return []*schema.ResourceData{d}, nil
-			},
-		},
+		Create: resourceGithubActionsEnvironmentSecretCreateOrUpdate,
+		Read:   resourceGithubActionsEnvironmentSecretRead,
+		Delete: resourceGithubActionsEnvironmentSecretDelete,
 
 		Schema: map[string]*schema.Schema{
+			"repository": {
+				Type:     schema.TypeString,
+				Required: true,
+				ForceNew: true,
+			},
+			"environment": {
+				Type:     schema.TypeString,
+				Required: true,
+				ForceNew: true,
+			},
 			"secret_name": {
 				Type:         schema.TypeString,
 				Required:     true,
@@ -34,31 +36,18 @@ func resourceGithubActionsOrganizationSecret() *schema.Resource {
 			},
 			"encrypted_value": {
 				Type:          schema.TypeString,
-				ForceNew:      true,
 				Optional:      true,
+				ForceNew:      true,
 				Sensitive:     true,
 				ConflictsWith: []string{"plaintext_value"},
 				ValidateFunc:  validation.StringIsBase64,
 			},
 			"plaintext_value": {
 				Type:          schema.TypeString,
-				ForceNew:      true,
 				Optional:      true,
+				ForceNew:      true,
 				Sensitive:     true,
 				ConflictsWith: []string{"encrypted_value"},
-			},
-			"visibility": {
-				Type:         schema.TypeString,
-				Required:     true,
-				ValidateFunc: validateValueFunc([]string{"all", "private", "selected"}),
-				ForceNew:     true,
-			},
-			"selected_repository_ids": {
-				Type: schema.TypeSet,
-				Elem: &schema.Schema{
-					Type: schema.TypeInt,
-				},
-				Optional: true,
 			},
 			"created_at": {
 				Type:     schema.TypeString,
@@ -72,33 +61,23 @@ func resourceGithubActionsOrganizationSecret() *schema.Resource {
 	}
 }
 
-func resourceGithubActionsOrganizationSecretCreateOrUpdate(d *schema.ResourceData, meta interface{}) error {
+func resourceGithubActionsEnvironmentSecretCreateOrUpdate(d *schema.ResourceData, meta interface{}) error {
 	client := meta.(*Owner).v3client
 	owner := meta.(*Owner).name
 	ctx := context.Background()
 
+	repoName := d.Get("repository").(string)
+	envName := d.Get("environment").(string)
 	secretName := d.Get("secret_name").(string)
 	plaintextValue := d.Get("plaintext_value").(string)
 	var encryptedValue string
 
-	visibility := d.Get("visibility").(string)
-	selectedRepositories, hasSelectedRepositories := d.GetOk("selected_repository_ids")
-
-	if visibility != "selected" && hasSelectedRepositories {
-		return fmt.Errorf("Cannot use selected_repository_ids without visibility being set to selected")
+	repo, _, err := client.Repositories.Get(ctx, owner, repoName)
+	if err != nil {
+		return err
 	}
 
-	selectedRepositoryIDs := []int64{}
-
-	if hasSelectedRepositories {
-		ids := selectedRepositories.(*schema.Set).List()
-
-		for _, id := range ids {
-			selectedRepositoryIDs = append(selectedRepositoryIDs, int64(id.(int)))
-		}
-	}
-
-	keyId, publicKey, err := getOrganizationPublicKeyDetails(owner, meta)
+	keyId, publicKey, err := getEnvironmentPublicKeyDetails(repo.GetID(), envName, meta)
 	if err != nil {
 		return err
 	}
@@ -115,32 +94,40 @@ func resourceGithubActionsOrganizationSecretCreateOrUpdate(d *schema.ResourceDat
 
 	// Create an EncryptedSecret and encrypt the plaintext value into it
 	eSecret := &github.EncryptedSecret{
-		Name:                  secretName,
-		KeyID:                 keyId,
-		Visibility:            visibility,
-		SelectedRepositoryIDs: selectedRepositoryIDs,
-		EncryptedValue:        encryptedValue,
+		Name:           secretName,
+		KeyID:          keyId,
+		EncryptedValue: encryptedValue,
 	}
 
-	_, err = client.Actions.CreateOrUpdateOrgSecret(ctx, owner, eSecret)
+	_, err = client.Actions.CreateOrUpdateEnvSecret(ctx, repo.GetID(), envName, eSecret)
 	if err != nil {
 		return err
 	}
 
-	d.SetId(secretName)
-	return resourceGithubActionsOrganizationSecretRead(d, meta)
+	d.SetId(buildThreePartID(repoName, envName, secretName))
+	return resourceGithubActionsEnvironmentSecretRead(d, meta)
 }
 
-func resourceGithubActionsOrganizationSecretRead(d *schema.ResourceData, meta interface{}) error {
+func resourceGithubActionsEnvironmentSecretRead(d *schema.ResourceData, meta interface{}) error {
 	client := meta.(*Owner).v3client
 	owner := meta.(*Owner).name
 	ctx := context.Background()
 
-	secret, _, err := client.Actions.GetOrgSecret(ctx, owner, d.Id())
+	repoName, envName, secretName, err := parseThreePartID(d.Id(), "repository", "environment", "secret_name")
+	if err != nil {
+		return err
+	}
+
+	repo, _, err := client.Repositories.Get(ctx, owner, repoName)
+	if err != nil {
+		return err
+	}
+
+	secret, _, err := client.Actions.GetEnvSecret(ctx, repo.GetID(), envName, secretName)
 	if err != nil {
 		if ghErr, ok := err.(*github.ErrorResponse); ok {
 			if ghErr.Response.StatusCode == http.StatusNotFound {
-				log.Printf("[WARN] Removing actions secret %s from state because it no longer exists in GitHub",
+				log.Printf("[WARN] Removing environment secret %s from state because it no longer exists in GitHub",
 					d.Id())
 				d.SetId("")
 				return nil
@@ -152,24 +139,6 @@ func resourceGithubActionsOrganizationSecretRead(d *schema.ResourceData, meta in
 	d.Set("encrypted_value", d.Get("encrypted_value"))
 	d.Set("plaintext_value", d.Get("plaintext_value"))
 	d.Set("created_at", secret.CreatedAt.String())
-	d.Set("visibility", secret.Visibility)
-
-	selectedRepositoryIDs := []int64{}
-
-	if secret.Visibility == "selected" {
-		selectedRepoList, _, err := client.Actions.ListSelectedReposForOrgSecret(ctx, owner, d.Id())
-		if err != nil {
-			return err
-		}
-
-		selectedRepositories := selectedRepoList.Repositories
-
-		for _, repo := range selectedRepositories {
-			selectedRepositoryIDs = append(selectedRepositoryIDs, repo.GetID())
-		}
-	}
-
-	d.Set("selected_repository_ids", selectedRepositoryIDs)
 
 	// This is a drift detection mechanism based on timestamps.
 	//
@@ -187,7 +156,7 @@ func resourceGithubActionsOrganizationSecretRead(d *schema.ResourceData, meta in
 	// as deleted (unset the ID) in order to fix potential drift by recreating
 	// the resource.
 	if updatedAt, ok := d.GetOk("updated_at"); ok && updatedAt != secret.UpdatedAt.String() {
-		log.Printf("[WARN] The secret %s has been externally updated in GitHub", d.Id())
+		log.Printf("[WARN] The environment secret %s has been externally updated in GitHub", d.Id())
 		d.SetId("")
 	} else if !ok {
 		d.Set("updated_at", secret.UpdatedAt.String())
@@ -196,21 +165,30 @@ func resourceGithubActionsOrganizationSecretRead(d *schema.ResourceData, meta in
 	return nil
 }
 
-func resourceGithubActionsOrganizationSecretDelete(d *schema.ResourceData, meta interface{}) error {
+func resourceGithubActionsEnvironmentSecretDelete(d *schema.ResourceData, meta interface{}) error {
 	client := meta.(*Owner).v3client
-	orgName := meta.(*Owner).name
+	owner := meta.(*Owner).name
 	ctx := context.WithValue(context.Background(), ctxId, d.Id())
 
-	log.Printf("[DEBUG] Deleting secret: %s", d.Id())
-	_, err := client.Actions.DeleteOrgSecret(ctx, orgName, d.Id())
+	repoName, envName, secretName, err := parseThreePartID(d.Id(), "repository", "environment", "secret_name")
+	if err != nil {
+		return err
+	}
+	repo, _, err := client.Repositories.Get(ctx, owner, repoName)
+	if err != nil {
+		return err
+	}
+	log.Printf("[DEBUG] Deleting environment secret: %s", d.Id())
+	_, err = client.Actions.DeleteEnvSecret(ctx, repo.GetID(), envName, secretName)
+
 	return err
 }
 
-func getOrganizationPublicKeyDetails(owner string, meta interface{}) (keyId, pkValue string, err error) {
+func getEnvironmentPublicKeyDetails(repoID int64, envName string, meta interface{}) (keyId, pkValue string, err error) {
 	client := meta.(*Owner).v3client
 	ctx := context.Background()
 
-	publicKey, _, err := client.Actions.GetOrgPublicKey(ctx, owner)
+	publicKey, _, err := client.Actions.GetEnvPublicKey(ctx, int(repoID), envName)
 	if err != nil {
 		return keyId, pkValue, err
 	}
