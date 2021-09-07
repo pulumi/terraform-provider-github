@@ -2,11 +2,12 @@ package github
 
 import (
 	"context"
+	"log"
 	"net/http"
 	"net/url"
 	"path"
 
-	"github.com/google/go-github/v36/github"
+	"github.com/google/go-github/v37/github"
 	"github.com/hashicorp/terraform-plugin-sdk/helper/logging"
 	"github.com/shurcooL/githubv4"
 	"golang.org/x/oauth2"
@@ -148,9 +149,14 @@ func (c *Config) Meta() (interface{}, error) {
 	owner.v3client = v3client
 
 	if c.Anonymous() {
+		log.Printf("[DEBUG] No token present; configuring anonymous owner.")
 		return &owner, nil
 	} else {
-		return c.ConfigureOwner(&owner)
+		_, err = c.ConfigureOwner(&owner)
+		if err != nil {
+			return &owner, err
+		}
+		log.Printf("[DEBUG] Token present; configuring authenticated owner: %s", owner.name)
+		return &owner, nil
 	}
-
 }
