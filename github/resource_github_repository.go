@@ -9,7 +9,7 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/google/go-github/v38/github"
+	"github.com/google/go-github/v39/github"
 	"github.com/hashicorp/terraform-plugin-sdk/helper/schema"
 	"github.com/hashicorp/terraform-plugin-sdk/helper/validation"
 )
@@ -87,6 +87,11 @@ func resourceGithubRepository() *schema.Resource {
 				Type:     schema.TypeBool,
 				Optional: true,
 				Default:  true,
+			},
+			"allow_auto_merge": {
+				Type:     schema.TypeBool,
+				Optional: true,
+				Default:  false,
 			},
 			"delete_branch_on_merge": {
 				Type:     schema.TypeBool,
@@ -268,6 +273,7 @@ func resourceGithubRepositoryObject(d *schema.ResourceData) *github.Repository {
 		AllowMergeCommit:    github.Bool(d.Get("allow_merge_commit").(bool)),
 		AllowSquashMerge:    github.Bool(d.Get("allow_squash_merge").(bool)),
 		AllowRebaseMerge:    github.Bool(d.Get("allow_rebase_merge").(bool)),
+		AllowAutoMerge:      github.Bool(d.Get("allow_auto_merge").(bool)),
 		DeleteBranchOnMerge: github.Bool(d.Get("delete_branch_on_merge").(bool)),
 		AutoInit:            github.Bool(d.Get("auto_init").(bool)),
 		LicenseTemplate:     github.String(d.Get("license_template").(string)),
@@ -416,6 +422,7 @@ func resourceGithubRepositoryRead(d *schema.ResourceData, meta interface{}) erro
 	d.Set("allow_merge_commit", repo.GetAllowMergeCommit())
 	d.Set("allow_squash_merge", repo.GetAllowSquashMerge())
 	d.Set("allow_rebase_merge", repo.GetAllowRebaseMerge())
+	d.Set("allow_auto_merge", repo.GetAllowAutoMerge())
 	d.Set("delete_branch_on_merge", repo.GetDeleteBranchOnMerge())
 	d.Set("has_downloads", repo.GetHasDownloads())
 	d.Set("full_name", repo.GetFullName())
@@ -569,7 +576,7 @@ func resourceGithubRepositoryUpdate(d *schema.ResourceData, meta interface{}) er
 			}
 		}
 	} else {
-		log.Printf("[DEBUG] <<<<<<<<<< no privacy update required. private: %v", d.Get("private"))
+		log.Printf("[DEBUG] No privacy update required. private: %v", d.Get("private"))
 	}
 
 	return resourceGithubRepositoryRead(d, meta)

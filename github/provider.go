@@ -3,6 +3,7 @@ package github
 import (
 	"fmt"
 	"log"
+	"time"
 
 	"github.com/hashicorp/terraform-plugin-sdk/helper/schema"
 	"github.com/hashicorp/terraform-plugin-sdk/terraform"
@@ -41,6 +42,12 @@ func Provider() terraform.ResourceProvider {
 				Optional:    true,
 				Default:     false,
 				Description: descriptions["insecure"],
+			},
+			"write_delay_ms": {
+				Type:        schema.TypeInt,
+				Optional:    true,
+				Default:     1000,
+				Description: descriptions["write_delay_ms"],
 			},
 			"app_auth": {
 				Type:        schema.TypeList,
@@ -91,6 +98,7 @@ func Provider() terraform.ResourceProvider {
 			"github_organization_webhook":                     resourceGithubOrganizationWebhook(),
 			"github_project_card":                             resourceGithubProjectCard(),
 			"github_project_column":                           resourceGithubProjectColumn(),
+			"github_repository_autolink_reference":            resourceGithubRepositoryAutolinkReference(),
 			"github_repository_collaborator":                  resourceGithubRepositoryCollaborator(),
 			"github_repository_deploy_key":                    resourceGithubRepositoryDeployKey(),
 			"github_repository_environment":                   resourceGithubRepositoryEnvironment(),
@@ -122,11 +130,13 @@ func Provider() terraform.ResourceProvider {
 			"github_release":                       dataSourceGithubRelease(),
 			"github_repositories":                  dataSourceGithubRepositories(),
 			"github_repository":                    dataSourceGithubRepository(),
+			"github_repository_file":               dataSourceGithubRepositoryFile(),
 			"github_repository_milestone":          dataSourceGithubRepositoryMilestone(),
 			"github_repository_pull_request":       dataSourceGithubRepositoryPullRequest(),
 			"github_repository_pull_requests":      dataSourceGithubRepositoryPullRequests(),
 			"github_team":                          dataSourceGithubTeam(),
 			"github_user":                          dataSourceGithubUser(),
+			"github_users":                         dataSourceGithubUsers(),
 		},
 	}
 
@@ -157,6 +167,8 @@ func init() {
 		"app_auth.id":              "The GitHub App ID.",
 		"app_auth.installation_id": "The GitHub App installation instance ID.",
 		"app_auth.pem_file":        "The GitHub App PEM file contents.",
+		"write_delay_ms": "Amount of time in milliseconds to sleep in between writes to GitHub API. " +
+			"Defaults to 1000ms or 1s if not set.",
 	}
 }
 
@@ -220,11 +232,18 @@ func providerConfigure(p *schema.Provider) schema.ConfigureFunc {
 			token = appToken
 		}
 
+		writeDelay := d.Get("write_delay_ms").(int)
+		if writeDelay <= 0 {
+			return nil, fmt.Errorf("write_delay_ms must be greater than 0ms")
+		}
+		log.Printf("[DEBUG] Setting write_delay_ms to %d", writeDelay)
+
 		config := Config{
-			Token:    token,
-			BaseURL:  baseURL,
-			Insecure: insecure,
-			Owner:    owner,
+			Token:      token,
+			BaseURL:    baseURL,
+			Insecure:   insecure,
+			Owner:      owner,
+			WriteDelay: time.Duration(writeDelay) * time.Millisecond,
 		}
 
 		meta, err := config.Meta()
